@@ -1,7 +1,10 @@
 import snowflake.connector
 import os
+import glob
 import math
 import more_itertools
+import subprocess
+from datetime import datetime
 from multiprocessing.pool import Pool
 from dotenv import load_dotenv
 import requests
@@ -19,7 +22,12 @@ conn = snowflake.connector.connect(
 cur = conn.cursor()
 
 try:
-    (max_db_id,) = cur.execute('select max(id) from items;').fetchone()
+    # fetch items 1 week before the latest item we have to account for any updates that may happen to the items
+    (max_db_id,) = cur.execute("""
+        select max(id)
+        from items
+        where time < (select max(time) - interval '1 week' from items);
+    """).fetchone()
 except snowflake.connector.errors.ProgrammingError as e:
     cur.close()
     conn.close()
@@ -38,6 +46,10 @@ try:
 except FileExistsError as e:
     pass
 
+# cleanup data directory from previous runs
+for f in glob.glob('./data/*'):
+    os.remove(f)
+
 ids_per_process = math.ceil(len(ids_to_fetch) / num_processes)
 
 split_ids_to_fetch = more_itertools.divide(num_processes, ids_to_fetch)
@@ -45,18 +57,95 @@ split_ids_to_fetch = more_itertools.divide(num_processes, ids_to_fetch)
 def job(ids):
     pid = os.getpid()
 
-    items = []
-    for id_ in ids:
-        url = f'https://hacker-news.firebaseio.com/v0/item/{id_}.json'
-        item = requests.get(url).text
-        items.append(item)
-
     filename = f'data/items_{pid}'
     with open(filename, 'w') as f:
-        content = '\n'.join(items)
-        f.write(content + '\n')
+        for id_ in ids:
+            url = f'https://hacker-news.firebaseio.com/v0/item/{id_}.json'
+            item = requests.get(url).text
+            f.write(item + '\n')
 
     return filename
 
 with Pool(processes = num_processes) as pool:
-    print(pool.map(job, split_ids_to_fetch))
+    item_part_files = pool.map(job, split_ids_to_fetch)
+
+formatted_date = datetime.utcnow().date().strftime("%Y_%m_%d")
+subprocess.run(f'cat data/* > data/all_items_{formatted_date}.json', shell = True, check = True)
+
+all_items_full_path = f'{os.getcwd()}/data/all_items_{formatted_date}.json'
+
+try:
+    # cleanup any previously staged files
+    cur.execute('remove @%raw_items;')
+
+    # the table stage is an implicit stage created for every table so no need to create it
+    # snowflake put will auto_compress by default into gz
+    cur.execute(f'put file://{all_items_full_path} @%raw_items;')
+
+    cur.execute('truncate raw_items;')
+
+    cur.execute(f"""
+        copy into raw_items
+        from @%raw_items/all_items_{formatted_date}.json.gz
+        file_format = ( type = json );
+    """)
+
+    cur.execute(f"""
+        merge into items as trg using raw_items as src on trg.id = src.item:id
+          when matched then update set
+            trg.id = src.item:id,
+            trg.deleted = src.item:deleted,
+            trg.type = src.item:type,
+            trg.by_ = src.item:by_,
+            trg.time = src.item:time,
+            trg.text = src.item:text,
+            trg.dead = src.item:dead,
+            trg.parent = src.item:parent,
+            trg.poll = src.item:poll,
+            trg.kids = src.item:kids,
+            trg.url = src.item:url,
+            trg.score = src.item:score,
+            trg.title = src.item:title,
+            trg.parts = src.item:parts,
+            trg.descendants = src.item:descendants
+          when not matched then insert (
+            id,
+            deleted,
+            type,
+            by_,
+            time,
+            text,
+            dead,
+            parent,
+            poll,
+            kids,
+            url,
+            score,
+            title,
+            parts,
+            descendants
+          ) values (
+            src.item:id,
+            src.item:deleted,
+            src.item:type,
+            src.item:by,
+            src.item:time,
+            src.item:text,
+            src.item:dead,
+            src.item:parent,
+            src.item:poll,
+            src.item:kids,
+            src.item:url,
+            src.item:score,
+            src.item:title,
+            src.item:parts,
+            src.item:descendants
+          );
+    """)
+
+    # cleanup after we're done
+    cur.execute('remove @%raw_items;')
+except snowflake.connector.errors.ProgrammingError as e:
+    cur.close()
+    conn.close()
+    raise e
