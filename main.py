@@ -92,6 +92,7 @@ try:
 
     cur.execute(f"""
         merge into items as trg using raw_items as src on trg.id = src.item:id
+          when matched and trg.id is null then delete
           when matched then update set
             trg.id = src.item:id,
             trg.deleted = src.item:deleted,
@@ -108,7 +109,7 @@ try:
             trg.title = src.item:title,
             trg.parts = src.item:parts,
             trg.descendants = src.item:descendants
-          when not matched then insert (
+          when not matched and src.item:id is not null then insert (
             id,
             deleted,
             type,
