@@ -5,9 +5,13 @@ import math
 import more_itertools
 import subprocess
 from datetime import datetime
+import multiprocessing
 from multiprocessing.pool import Pool
 from dotenv import load_dotenv
 import requests
+from atpbar import atpbar, register_reporter, find_reporter, flush
+
+multiprocessing.set_start_method('fork', force=True)
 
 load_dotenv()
 
@@ -59,15 +63,18 @@ def job(ids):
 
     filename = f'data/items_{pid}'
     with open(filename, 'w') as f:
-        for id_ in ids:
+        for id_ in atpbar(list(ids), name = multiprocessing.current_process().name):
             url = f'https://hacker-news.firebaseio.com/v0/item/{id_}.json'
             item = requests.get(url).text
             f.write(item + '\n')
 
     return filename
 
-with Pool(processes = num_processes) as pool:
+reporter = find_reporter()
+
+with Pool(processes = num_processes, initializer = register_reporter, initargs = [reporter]) as pool:
     item_part_files = pool.map(job, split_ids_to_fetch)
+    flush()
 
 formatted_date = datetime.utcnow().date().strftime("%Y_%m_%d")
 subprocess.run(f'cat data/* > data/all_items_{formatted_date}.json', shell = True, check = True)
