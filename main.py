@@ -1,5 +1,6 @@
 import snowflake.connector
 import os
+import time
 import glob
 import math
 import more_itertools
@@ -58,15 +59,28 @@ ids_per_process = math.ceil(len(ids_to_fetch) / num_processes)
 
 split_ids_to_fetch = more_itertools.divide(num_processes, ids_to_fetch)
 
+rate_limit = 300 # in requests / second
+rate_limit_per_job = rate_limit / num_processes
+seconds_to_wait_between_requests = 1 / rate_limit_per_job
+
 def job(ids):
     pid = os.getpid()
 
     filename = f'data/items_{pid}'
     with open(filename, 'w') as f:
         for id_ in atpbar(list(ids), name = multiprocessing.current_process().name):
+            start_time = time.time()
+
             url = f'https://hacker-news.firebaseio.com/v0/item/{id_}.json'
             item = requests.get(url).text
             f.write(item + '\n')
+
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+
+            if elapsed_time < seconds_to_wait_between_requests:
+                time.sleep(seconds_to_wait_between_requests - elapsed_time)
+
 
     return filename
 
