@@ -166,6 +166,7 @@ try:
     """)
 
     # cleanup after we're done
+    cur.execute('truncate load_db.hackernews.items;')
     cur.execute('remove @load_db.hackernews.%items;')
 except snowflake.connector.errors.ProgrammingError as e:
     cur.close()
