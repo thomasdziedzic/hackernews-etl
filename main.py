@@ -97,22 +97,22 @@ all_items_full_path = f'{os.getcwd()}/data/all_items_{formatted_date}.json'
 
 try:
     # cleanup any previously staged files
-    cur.execute('remove @%raw_items;')
+    cur.execute('remove @load_db.hackernews.%items;')
 
     # the table stage is an implicit stage created for every table so no need to create it
     # snowflake put will auto_compress by default into gz
-    cur.execute(f'put file://{all_items_full_path} @%raw_items;')
+    cur.execute(f'put file://{all_items_full_path} @load_db.hackernews.%items;')
 
-    cur.execute('truncate raw_items;')
+    cur.execute('truncate load_db.hackernews.items;')
 
     cur.execute(f"""
-        copy into raw_items
-        from @%raw_items/all_items_{formatted_date}.json.gz
+        copy into load_db.hackernews.items
+        from @load_db.hackernews.%items/all_items_{formatted_date}.json.gz
         file_format = ( type = json );
     """)
 
     cur.execute(f"""
-        merge into items as trg using raw_items as src on trg.id = src.item:id
+        merge into raw_db.hackernews.items as trg using load_db.hackernews.items as src on trg.id = src.item:id
           when matched and trg.id is null then delete
           when matched then update set
             trg.id = src.item:id,
@@ -166,7 +166,7 @@ try:
     """)
 
     # cleanup after we're done
-    cur.execute('remove @%raw_items;')
+    cur.execute('remove @load_db.hackernews.%items;')
 except snowflake.connector.errors.ProgrammingError as e:
     cur.close()
     conn.close()
