@@ -67,12 +67,14 @@ def job(ids):
     pid = os.getpid()
 
     filename = f'data/items_{pid}'
+    # reuse connection between requests https://stackoverflow.com/a/34491383
+    session = requests.Session()
     with open(filename, 'w') as f:
         for id_ in atpbar(list(ids), name = multiprocessing.current_process().name):
             start_time = time.time()
 
             url = f'https://hacker-news.firebaseio.com/v0/item/{id_}.json'
-            item = requests.get(url).text
+            item = session.get(url).text
             f.write(item + '\n')
 
             end_time = time.time()
